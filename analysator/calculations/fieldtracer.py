@@ -407,7 +407,7 @@ def static_field_tracer_3d( vlsvReader, seed_coords, max_iterations, dx, directi
    return points_traced       # list for fg; 3d numpy array(N,maxiterations,3) for vg
 
 
-def streaklines_3D(files_list: list, seed_points: list, direction="+", is_test= False):
+def streaklines_3D(files_list: list, seed_points: list, direction="+", is_test= False, integration_steps = 1):
    """
    form a (N, T, T, 3) matrix where N: number of seed points, T: number of timesteps, and 3D coordinates
    Each seed gives a (i,j,3) matrix where the i-axis is the coordinate time, and j-axis is the release time of the particles
@@ -422,6 +422,14 @@ def streaklines_3D(files_list: list, seed_points: list, direction="+", is_test= 
    keep track of current position using current_pos = (N,T,3)
    """
 
+   if direction == "both":
+      M_plus = streaklines_3D(files_list, seed_points, direction="+", is_test=is_test)
+      M_minus = streaklines_3D(files_list, seed_points, direction="-", is_test=is_test)
+      M_both =  np.nansum(np.stack([M_plus,M_minus], axis = 0),axis = 0)
+      #fix diagonal
+      for t in range(len(files_list)):
+         M_both[:,t,t,:] = M_plus[:,t,t,:]
+      return M_both
    #number of time steps
    T = len(files_list)
    #number of seed points
@@ -454,10 +462,11 @@ def streaklines_3D(files_list: list, seed_points: list, direction="+", is_test= 
       
       if direction == "+":
          current_cols = range(0,file_index+1)
-      else:
+      
+      elif direction == "-":
          #negative direction
          current_cols = range(file_index,T)
-
+      
       #record current positions
       for n in range(N):
          for j in current_cols:
@@ -479,10 +488,6 @@ def streaklines_3D(files_list: list, seed_points: list, direction="+", is_test= 
       n_idx, j_idx = np.meshgrid(ns,js, indexing = "ij")
       n_idx = n_idx.ravel()
       j_idx = j_idx.ravel()
-      positions = current_pos[n_idx,j_idx, :]
-
-      velocities = vlsvfile.read_interpolated_variable("vg_v",positions)
-
 
       #read next vlsvfile for time
       next_file = file_index + 1 if direction == "+" else file_index - 1
@@ -491,8 +496,24 @@ def streaklines_3D(files_list: list, seed_points: list, direction="+", is_test= 
       
       dt = abs(t_1-t_0)
 
-      #calculate new positions 
-      current_pos[n_idx, j_idx, :] += sign*velocities*dt
+      if integration_steps == 1:
+
+         positions = current_pos[n_idx,j_idx, :]
+
+         velocities = vlsvfile.read_interpolated_variable("vg_v",positions)
+
+         #calculate new positions 
+         current_pos[n_idx, j_idx, :] += sign*velocities*dt
+      else: 
+         #reads interpolated time between vlsvfiles for more accurate integration
+         dt_step = dt/integration_steps
+
+         for step in range(integration_steps):
+
+            t_step = t_0 + dt_step*step
+            positions = current_pos[n_idx,j_idx, :]
+            velocities = pt.calculations.timeevolution.get_interpolated_variable(vlsvfile,next_vslv, "vg_v", positions,t_step)
+            current_pos[n_idx,j_idx, :] += sign*velocities*dt_step
 
       #set next points as current points for the next looping
       t_0 = t_1
