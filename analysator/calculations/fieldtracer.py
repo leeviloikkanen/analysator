@@ -406,3 +406,100 @@ def static_field_tracer_3d( vlsvReader, seed_coords, max_iterations, dx, directi
 
    return points_traced       # list for fg; 3d numpy array(N,maxiterations,3) for vg
 
+
+def streaklines_3D(files_list: list, seed_points: list, direction="+", is_test= False):
+   """
+   form a (N, T, T, 3) matrix where N: number of seed points, T: number of timesteps, and 3D coordinates
+   Each seed gives a (i,j,3) matrix where the i-axis is the coordinate time, and j-axis is the release time of the particles
+   i=j gives the seed point/release point where particles are started to track 
+   algorithm forward: 
+      -open file i
+      -place particle in i=j
+      -record all particle positions
+      -move all particles j<=i according to velocity at time i
+         -current_pos += velocity*dt
+      loop till end
+   keep track of current position using current_pos = (N,T,3)
+   """
+
+   #number of time steps
+   T = len(files_list)
+   #number of seed points
+   N = len(seed_points)
+
+   #Full matrix that is filled with coordinates 
+   M = np.full((N,T,T,3), np.nan)
+
+   sign = 1 if direction == "+" else -1
+   #records the current positions of the tracked plasma
+   current_pos = np.full((N,T,3), np.nan)
+
+   file_indices = list(range(T)) if direction == "+" else list(range(T - 1, -1, -1))
+
+   for i, file_index in enumerate(file_indices):
+
+      if i == 0:
+         #initial file read and timestep
+         if is_test:
+            print("test")
+            t_0 = 0
+         else:   
+            vlsvfile = pt.vlsvfile.VlsvReader(files_list[file_index])
+            t_0 = vlsvfile.read_parameter("time")
+      for n in range(N):
+
+         current_pos[n, file_index,:] = seed_points[n]
+         #Diagonal point so initial point
+         M[n, file_index, file_index,:] = seed_points[n]
+      
+      if direction == "+":
+         current_cols = range(0,file_index+1)
+      else:
+         #negative direction
+         current_cols = range(file_index,T)
+
+      #record current positions
+      for n in range(N):
+         for j in current_cols:
+            M[n,file_index,j,:] = current_pos[n,j,:] 
+      if i == T-1:
+         #On last step return the matrix and dont continue the integration
+         return M
+
+      #INTEGRATION STARTS HERE
+      #first record the current velocities 
+      if direction == "+":
+         js = np.arange(0,file_index+1)
+      else:
+         #negative direction
+         js = np.arange(file_index,T)
+         
+
+      ns = np.arange(N)
+      n_idx, j_idx = np.meshgrid(ns,js, indexing = "ij")
+      n_idx = n_idx.ravel()
+      j_idx = j_idx.ravel()
+      positions = current_pos[n_idx,j_idx, :]
+
+      velocities = vlsvfile.read_interpolated_variable("vg_v",positions)
+
+
+      #read next vlsvfile for time
+      next_file = file_index + 1 if direction == "+" else file_index - 1
+      next_vslv = pt.vlsvfile.VlsvReader(files_list[next_file])
+      t_1 = next_vslv.read_parameter("time")
+      
+      dt = abs(t_1-t_0)
+
+      #calculate new positions 
+      current_pos[n_idx, j_idx, :] += sign*velocities*dt
+
+      #set next points as current points for the next looping
+      t_0 = t_1
+      vlsvfile = next_vslv 
+      
+
+   
+   #Back up return M 
+   return M #matrix of form shape = (N, T, T, 3)
+
