@@ -475,7 +475,7 @@ class streaklines:
       pass
 
    
-   def streaklines_3D(self, vlsvTObject = None, files_list = None, seed_points = None, direction="+", dt_step=0.1, max_dx = 1e5, method = "euler", points_per = 10, var = "vg_v"):
+   def streaklines_3D(self, vlsvTObject = None, files_list = None, seed_points = None, direction="+", dt_step=0.1, max_dx = 1e6, method = "euler", points_per = 10, var = "vg_v"):
       """
       Streaklines 3D() integrates along dynamic field-grid vector field to calculate a final position. 
       Code uses Euler or RK4  method to conduct the tracing.
@@ -572,14 +572,14 @@ class streaklines:
          
          #update current particle positions according to the step
          v = v.reshape(-1,3)
-         """
+        
          if np.any(np.linalg.norm(dt_s*v,axis=1)>max_dx):
             #recursively add additional two half sized integration steps 
             integration_step(t_step, dt_s/2, n_idx, j_idx, method=method)
             integration_step(t_step+sign*dt_s/2, dt_s/2, n_idx, j_idx, method = method)
             
             return
-         """
+         
          #print(np.max(np.linalg.norm(dt_s*v,axis=1)))
          current_pos[n_idx, j_idx, :] += sign*dt_s*v
 
@@ -725,7 +725,8 @@ class streaklines:
       return streakline 
 
 
-def pathlines(vlsvTObject = None, files_list = None, seed_points = None, direction = "+", points_recorded = None, points_per = 10, dt_step = 0.1, var = "vg_v", tracked_vars = None, method = "euler"):
+def pathlines(vlsvTObject = None, files_list = None, seed_points = None, direction = "+", points_recorded = None, 
+              points_per = 10, dt_step = 0.1, var = "vg_v", tracked_vars = None, method = "euler", max_dx = 1e6):
    """
    Function to track the pathlines of plasma parcels and their features ("vg_b_vol", "proton/vg_beta_star" etc.)
    Scales better than streaklines class if pathlines are of only interest.
@@ -774,8 +775,9 @@ def pathlines(vlsvTObject = None, files_list = None, seed_points = None, directi
    
    #records the current positions of the tracked plasma
    current_pos = np.array(seed_points,dtype = float)
-
+   
    tracked_objs = {}
+   tracked_objs["Time"] = np.full(T_eff, np.nan)
    if tracked_vars is not None:
       for tracked_var in tracked_vars:
          test_val = np.array(vlsvTObject(vlsvTObject.ts[0], current_pos, tracked_var))
@@ -785,7 +787,9 @@ def pathlines(vlsvTObject = None, files_list = None, seed_points = None, directi
             test_val = test_val.reshape(N,-1)
          var_shape = test_val.shape[1:]
          tracked_objs[tracked_var] = np.full((N,T_eff) + var_shape, np.nan)
-         print(tracked_objs[tracked_var].shape)
+      tracked_vars  = list(tracked_vars) + ["Time"]
+   else:
+      tracked_vars = ["Time"]
          
    def _get_var(t, positions, var):
       result = vlsvTObject(t, positions, var)
@@ -802,7 +806,6 @@ def pathlines(vlsvTObject = None, files_list = None, seed_points = None, directi
          pram dt_s:   size of the integration step
          pram n_idx:  seed point index array
          pram j_idx:  release time index array
-
          """
 
          positions = current_pos
@@ -822,15 +825,14 @@ def pathlines(vlsvTObject = None, files_list = None, seed_points = None, directi
          
          #update current particle positions according to the step
          v = v.reshape(-1,3)
-         """
+         
          if np.any(np.linalg.norm(dt_s*v,axis=1)>max_dx):
             #recursively add additional two half sized integration steps 
-            integration_step(t_step, dt_s/2, n_idx, j_idx, method=method)
-            integration_step(t_step+sign*dt_s/2, dt_s/2, n_idx, j_idx, method = method)
+            integration_step(t_step, dt_s/2, current_pos=current_pos, method=method)
+            integration_step(t_step+sign*dt_s/2, dt_s/2, current_pos=current_pos, method = method)
             
             return
-         """
-         #print(np.max(np.linalg.norm(dt_s*v,axis=1)))
+         
          current_pos += sign*dt_s*v
    
    sign = 1 if direction == "+" else -1
@@ -845,8 +847,11 @@ def pathlines(vlsvTObject = None, files_list = None, seed_points = None, directi
       t_0 = vlsvTObject.ts[file_index]
 
       pathline_obj[:,eff_file_index,:] = current_pos
-      if tracked_vars is not None:
-         for tracked_var in tracked_vars:
+      
+      for tracked_var in tracked_vars:
+         if tracked_var == "Time":
+            tracked_objs[tracked_var][eff_file_index] = t_0
+         else:   
             tracked_objs[tracked_var][:,eff_file_index] = _get_var(t_0, current_pos, tracked_var)
 
       if i == T-1:
@@ -875,8 +880,11 @@ def pathlines(vlsvTObject = None, files_list = None, seed_points = None, directi
                prev_record_idx = record_idx
                eff_idx = eff_file_index + record_idx*sign  
                pathline_obj[:,eff_idx,:] = current_pos
-               if tracked_vars is not None:
-                  for tracked_var in tracked_vars:
-                     tracked_objs[tracked_var][:,eff_idx] = _get_var(t_0+t_elapsed, current_pos, tracked_var)
+               
+               for tracked_var in tracked_vars:
+                  if tracked_var == "Time":
+                     tracked_objs[tracked_var][eff_idx] = t_0+sign*t_elapsed
+                  else:   
+                     tracked_objs[tracked_var][:,eff_idx] = _get_var(t_0 + sign*t_elapsed, current_pos, tracked_var)
                
    return pathline_obj, tracked_objs
